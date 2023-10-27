@@ -2,6 +2,7 @@
 
 Kafka consumer and Kafka message assertions for testing environments.
 
+Disclaimer: this is a work in progress project, stay tuned for updates.
 
 ## Getting Started
 
