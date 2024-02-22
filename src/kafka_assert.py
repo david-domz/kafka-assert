@@ -1,56 +1,121 @@
+from typing import Optional, Union
 from collections import deque
-from typing import Optional
 import logging
 import time
 import uuid
 import json
+import jsonschema
 from confluent_kafka import (
 	Consumer,
 	Producer,
 	Message,
 	KafkaError
 )
-from json_assert import assert_json
+
+
+def assert_json(json_instance, expected_json_instance=None, expected_json_schema=None):
+	"""Validates JSON instances against expected instance or schema.
+
+	If `expected_json_instance` is provided, a direct comparison is made.
+
+	If `expected_json_schema` is provided, the function utilizes `jsonschema` to validate the
+	JSON instance against it.
+
+	Args:
+		json_instance (dict or list):	The JSON instance to be asserted.
+
+		expected_json_instance (dict or list, optional):	The expected JSON instance
+			for direct comparison.
+
+		expected_json_schema (dict, optional):	The JSON schema to validate the instance
+			against.
+
+	Raises:
+		AssertionError:	The JSON instance doesn't match the expected instance or schema.
+
+	Example:
+
+		# Schema-based validation
+		assert_json(
+			json_data,
+			expected_json_schema={
+				'type': 'object',
+				'properties': {
+					'name': {'type': 'string'},
+					'age': {'type': 'number'}
+				},
+				'required': ['name']
+			}
+		)
+
+	"""
+	if expected_json_instance and expected_json_schema:
+		raise ValueError('Provide only expected_json_instance or expected_json_schema, not both.')
+
+	if expected_json_instance:
+		assert json_instance == expected_json_instance,	\
+			f'Expected JSON response body was `{expected_json_instance}` but got `{json_instance}`'
+	elif expected_json_schema:
+		try:
+			jsonschema.validate(json_instance, expected_json_schema)
+		except jsonschema.ValidationError as e:
+			raise AssertionError('JSON instance does not match the expected schema') from e
+	else:
+		raise ValueError('Provide expected_json_instance or expected_json_schema')
+
 
 
 class KafkaConsumer():
-	"""Kafka consumer for testing.
+	"""Kafka consumer for testing environments.
 
-	This class encapsulates a Kafka consumer using the `confluent_kafka` library.
-	It allows for the consumption and processing of Kafka messages from specified topics.
+	This class encapsulates a Kafka consumer using the `confluent_kafka` library. It allows
+	for the consumption and processing of Kafka messages from specified topics.
 
 	Attributes:
-		consumer (Consumer): Underlying `confluent_kafka` consumer.
+		consumer (Consumer):	`confluent_kafka.Consumer` instance.
+
 		_topic_queue_mapping (Optional[dict]): Mapping of topic names to queues for
 			consuming and processing messages, if provided.
 
-	Args:
-		topics (Optional[Union[list[str], dict[str, deque]]]): List of topic names to
-			subscribe to, or mapping of topic names to queues for consumption.
-
-	Note:
-		If `_topic_queue_mapping` is provided during initialization, the consumer's
-		received messages can be added to their respective queues for separate processing.
-
-	Example:
-		Initializing with topics list:
-		>>> consumer = KafkaConsumer(['topic1', 'topic2'])
-
-		Initializing with topic-queue mapping:
-		>>> from collections import deque
-		>>> topic_queue_mapping = {'topic1': deque(), 'topic2': deque()}
-		>>> consumer = KafkaConsumer(topic_queue_mapping)
-
 	"""
 	def __init__(self,
-	      		topics: list[str] | dict[str, deque] | None,
+	      		topics: Optional[Union[list[str], dict[str, deque]]],
 			bootstrap_servers=None,
 			group_id=None,
 			config=None):
+		"""
+
+		Args:
+			topics (optional):	List of topic names to subscribe to, or mapping of
+				topic names to queues for consumption. If a mapping of topic names
+				to queues is provided, the consumer's received messages are added
+				to their respective queues for separate processing.
+
+			bootstrap_servers (str, optional):
+
+			group_id (str, optional):
+
+			config (dict, optional):
+
+		Example:
+			Initializing with a topic list:
+
+			>>> consumer = KafkaConsumer(topics=['topic1', 'topic2'])
+
+			Initializing with topic-queue mapping:
+
+			>>> from collections import deque
+			>>> orders_queue = deque()
+			>>> stock_queue = deque()
+			>>> consumer = KafkaConsumer(
+			>>>	topics={'orders-topic': orders_queue, 'stock-topic': stock_queue}
+			>>> )
+
+		"""
 		if bootstrap_servers is None:
 			bootstrap_servers = 'localhost:9093'
 		if group_id is None:
-			group_id = f'testattoo-{uuid.uuid4().hex[:8]}'
+			group_id = f'testessera-{uuid.uuid4().hex[:8]}'
 		if config is None:
 			config = {
 				"bootstrap.servers": bootstrap_servers,
@@ -70,14 +135,18 @@ class KafkaConsumer():
 			self.subscribe(topics)
 
 
-	def subscribe(self, topics: list[str] | dict[str, deque]):
+	def subscribe(self, topics: Union[list[str], dict[str, deque]]):
 		"""Subscribes to `topics` and waits for partition assignment.
 
 		Args:
-			topics:	List of topic names to subscribe or mapping of topic names to subscribe to consumption queues.
+			topics:	List of topic names to subscribe to, or mapping of topic names to
+				queues for consumption. If a mapping of topic names to queues is
+				provided, the consumer's received messages are added to their
+				respective queues for separate processing.
 
 		Raises:
 			KafkaException
+
 		Raises:
 			RuntimeError	If called on a closed consumer.
 
@@ -95,7 +164,6 @@ class KafkaConsumer():
 
 
 	def _wait_for_partition_assignment(self):
-
 		# Consider using the on_assign callback provided by confluent_kafka to know when partitions have been assigned
 
 		while True:
@@ -115,12 +183,13 @@ class KafkaConsumer():
 		received within the timeout, None is returned.
 
 		Args:
-			timeout (float, optional): The maximum time (in seconds) to wait for a message.
-				Defaults to 300.0 seconds (5 minutes).
+			timeout (float, optional): The maximum time (in seconds) to wait for a
+				message. Defaults to 300.0 seconds (5 minutes).
 
 		Returns:
 			Optional[Message]: The consumed Kafka message if available, or None if no message
 				was received within the timeout.
+
 		"""
 		start = time.time()
 		while (time.time() - start) < timeout:
@@ -185,19 +254,25 @@ class KafkaConsumer():
 
 class KafkaProducer():
 
-	def __init__(self, bootstrap_servers: str):
+	def __init__(self,
+	      		bootstrap_servers=None,
+			config=None):
 
-		config = {
-			'bootstrap.servers': bootstrap_servers,
-			"queue.buffering.max.ms": 0,
-			"acks": -1
-		}
-		self._producer = Producer(config)
+		if bootstrap_servers is None:
+			bootstrap_servers = 'localhost:9093'
+		if config is None:
+			config = {
+				'bootstrap.servers': bootstrap_servers,
+				"queue.buffering.max.ms": 0,
+				"acks": -1
+			}
+		self._producer = Producer(**config)
 
 
 	def produce(self, topic, key=None, value=None, partition=-1, timestamp=0, headers=None):
+		# pylint: disable=too-many-arguments
 		"""
-		
+
 		Raises:
 			BufferError
 			KafkaException
@@ -211,51 +286,38 @@ class KafkaProducer():
 		print('Done')
 
 
-def assert_json_kafka_message(msg: Message, expected_json_instance=None, expected_json_schema=None, **kwargs):
+def assert_kafka_message(
+		msg: Message,
+		expected_json_instance=None,
+		expected_json_schema=None,
+		**kwargs):
 	"""Asserts the contents of a JSON message consumed from Kafka.
 
 	Args:
-		msg:
-		expected_json_instance (dict | None):	The expected JSON instance to compare against (optional).
-		expected_json_schema (dict | None):	The expected JSON schema to validate against (optional).
-		**kwargs (dict):			Additional keyword arguments to compare specific property values. Property names
-			should be provided as keys, and expected values as values.
+		msg (Message):
+
+		expected_json_instance (dict, optional): The expected JSON instance to compare with.
+
+		expected_json_schema (dict, optional):	The expected JSON schema to validate with.
+
+		**kwargs (dict):			Additional keyword arguments to compare
+			specific property values. Property names should be provided as keys, and
+			expected values as values.
 
 	Raises:
-		AssertionError:		Assertion fails.
-		JSONDecodeError:	Error decoding the JSON content of the message.
-		
+		AssertionError		The assertion failed.
+
+		JSONDecodeError		Error decoding the JSON content of the message.
+
 	"""
 	assert msg, 'No Kafka message provided. If you called consume_one() or consume_many() they timed out.'
 
 	json_instance = json.loads(msg.value())
 
-	assert_json(json_instance, expected_json_instance, expected_json_schema)
+	if expected_json_instance or expected_json_schema:
+		assert_json(json_instance, expected_json_instance, expected_json_schema)
 
 	for key, expected_value in kwargs.items():
 		actual_value = json_instance[key]
 		assert actual_value == expected_value,	\
 			f'Expected property `{key}` value was {expected_value} but got value {actual_value}'
-
-
-def assert_kafka_consume_one(
-		kafka_consumer: KafkaConsumer,
-		expected_json_instance=None,
-		expected_json_schema=None,
-		**kwargs):
-	"""Consumes a single Kafka message using the provided KafkaConsumer and asserts its JSON content.
-
-	Args:
-		kafka_consumer (KafkaConsumer):		The KafkaConsumer instance to consume messages from.
-		expected_json_instance (dict | None):	The expected JSON instance to compare against (optional).
-		expected_json_schema (dict | None):	The expected JSON schema to validate against (optional).
-		**kwargs (dict):			Additional keyword arguments to compare specific property values. Property names
-			should be provided as keys, and expected values as values.
-
-	Raises:
-		AssertionError:		Assertion fails.
-		JSONDecodeError:	Error decoding the JSON content of the message.
-
-	"""
-	msg = kafka_consumer.consume_one()
-	assert_json_kafka_message(msg, expected_json_instance, expected_json_schema, **kwargs)
